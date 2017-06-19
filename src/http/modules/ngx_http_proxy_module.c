@@ -4,143 +4,20 @@
  * Copyright (C) Nginx, Inc.
  */
 
-
 #include <ngx_config.h>
 #include <ngx_core.h>
 #include <ngx_http.h>
+#include <ngx_http_proxy_module.h>
 
-
-typedef struct {
-    ngx_array_t                    caches;  /* ngx_http_file_cache_t * */
-} ngx_http_proxy_main_conf_t;
-
-
-typedef struct ngx_http_proxy_rewrite_s  ngx_http_proxy_rewrite_t;
-
-typedef ngx_int_t (*ngx_http_proxy_rewrite_pt)(ngx_http_request_t *r,
-    ngx_table_elt_t *h, size_t prefix, size_t len,
-    ngx_http_proxy_rewrite_t *pr);
-
-struct ngx_http_proxy_rewrite_s {
-    ngx_http_proxy_rewrite_pt      handler;
-
-    union {
-        ngx_http_complex_value_t   complex;
-#if (NGX_PCRE)
-        ngx_http_regex_t          *regex;
-#endif
-    } pattern;
-
-    ngx_http_complex_value_t       replacement;
-};
-
-
-typedef struct {
-    ngx_str_t                      key_start;
-    ngx_str_t                      schema;
-    ngx_str_t                      host_header;
-    ngx_str_t                      port;
-    ngx_str_t                      uri;
-} ngx_http_proxy_vars_t;
-
-
-typedef struct {
-    ngx_array_t                   *flushes;
-    ngx_array_t                   *lengths;
-    ngx_array_t                   *values;
-    ngx_hash_t                     hash;
-} ngx_http_proxy_headers_t;
-
-
-typedef struct {
-    ngx_http_upstream_conf_t       upstream;
-
-    ngx_array_t                   *body_flushes;
-    ngx_array_t                   *body_lengths;
-    ngx_array_t                   *body_values;
-    ngx_str_t                      body_source;
-
-    ngx_http_proxy_headers_t       headers;
-#if (NGX_HTTP_CACHE)
-    ngx_http_proxy_headers_t       headers_cache;
-#endif
-    ngx_array_t                   *headers_source;
-
-    ngx_array_t                   *proxy_lengths;
-    ngx_array_t                   *proxy_values;
-
-    ngx_array_t                   *redirects;
-    ngx_array_t                   *cookie_domains;
-    ngx_array_t                   *cookie_paths;
-
-    ngx_str_t                      method;
-    ngx_str_t                      location;
-    ngx_str_t                      url;
-
-#if (NGX_HTTP_CACHE)
-    ngx_http_complex_value_t       cache_key;
-#endif
-
-    ngx_http_proxy_vars_t          vars;
-
-    ngx_flag_t                     redirect;
-
-    ngx_uint_t                     http_version;
-
-    ngx_uint_t                     headers_hash_max_size;
-    ngx_uint_t                     headers_hash_bucket_size;
-
-#if (NGX_HTTP_SSL)
-    ngx_uint_t                     ssl;
-    ngx_uint_t                     ssl_protocols;
-    ngx_str_t                      ssl_ciphers;
-    ngx_uint_t                     ssl_verify_depth;
-    ngx_str_t                      ssl_trusted_certificate;
-    ngx_str_t                      ssl_crl;
-    ngx_str_t                      ssl_certificate;
-    ngx_str_t                      ssl_certificate_key;
-    ngx_array_t                   *ssl_passwords;
-#endif
-} ngx_http_proxy_loc_conf_t;
-
-
-typedef struct {
-    ngx_http_status_t              status;
-    ngx_http_chunked_t             chunked;
-    ngx_http_proxy_vars_t          vars;
-    off_t                          internal_body_length;
-
-    ngx_chain_t                   *free;
-    ngx_chain_t                   *busy;
-
-    unsigned                       head:1;
-    unsigned                       internal_chunked:1;
-    unsigned                       header_sent:1;
-} ngx_http_proxy_ctx_t;
-
-
-static ngx_int_t ngx_http_proxy_eval(ngx_http_request_t *r,
-    ngx_http_proxy_ctx_t *ctx, ngx_http_proxy_loc_conf_t *plcf);
-#if (NGX_HTTP_CACHE)
-static ngx_int_t ngx_http_proxy_create_key(ngx_http_request_t *r);
-#endif
-static ngx_int_t ngx_http_proxy_create_request(ngx_http_request_t *r);
-static ngx_int_t ngx_http_proxy_reinit_request(ngx_http_request_t *r);
 static ngx_int_t ngx_http_proxy_body_output_filter(void *data, ngx_chain_t *in);
-static ngx_int_t ngx_http_proxy_process_status_line(ngx_http_request_t *r);
+
 static ngx_int_t ngx_http_proxy_process_header(ngx_http_request_t *r);
-static ngx_int_t ngx_http_proxy_input_filter_init(void *data);
-static ngx_int_t ngx_http_proxy_copy_filter(ngx_event_pipe_t *p,
-    ngx_buf_t *buf);
+
 static ngx_int_t ngx_http_proxy_chunked_filter(ngx_event_pipe_t *p,
     ngx_buf_t *buf);
-static ngx_int_t ngx_http_proxy_non_buffered_copy_filter(void *data,
-    ssize_t bytes);
+
 static ngx_int_t ngx_http_proxy_non_buffered_chunked_filter(void *data,
     ssize_t bytes);
-static void ngx_http_proxy_abort_request(ngx_http_request_t *r);
-static void ngx_http_proxy_finalize_request(ngx_http_request_t *r,
-    ngx_int_t rc);
 
 static ngx_int_t ngx_http_proxy_host_variable(ngx_http_request_t *r,
     ngx_http_variable_value_t *v, uintptr_t data);
@@ -154,10 +31,7 @@ static ngx_int_t
     ngx_http_variable_value_t *v, uintptr_t data);
 static ngx_int_t ngx_http_proxy_internal_chunked_variable(ngx_http_request_t *r,
     ngx_http_variable_value_t *v, uintptr_t data);
-static ngx_int_t ngx_http_proxy_rewrite_redirect(ngx_http_request_t *r,
-    ngx_table_elt_t *h, size_t prefix);
-static ngx_int_t ngx_http_proxy_rewrite_cookie(ngx_http_request_t *r,
-    ngx_table_elt_t *h);
+
 static ngx_int_t ngx_http_proxy_rewrite_cookie_value(ngx_http_request_t *r,
     ngx_table_elt_t *h, u_char *value, ngx_array_t *rewrites);
 static ngx_int_t ngx_http_proxy_rewrite(ngx_http_request_t *r,
@@ -204,6 +78,8 @@ static ngx_int_t ngx_http_proxy_set_ssl(ngx_conf_t *cf,
 #endif
 static void ngx_http_proxy_set_vars(ngx_url_t *u, ngx_http_proxy_vars_t *v);
 
+static char *
+ngx_http_proxy_rewrite_uri(ngx_conf_t *cf, ngx_command_t *cmd, void *conf);
 
 static ngx_conf_post_t  ngx_http_proxy_lowat_post =
     { ngx_http_proxy_lowat_check };
@@ -245,9 +121,6 @@ static ngx_conf_enum_t  ngx_http_proxy_http_version[] = {
     { ngx_string("1.1"), NGX_HTTP_VERSION_11 },
     { ngx_null_string, 0 }
 };
-
-
-ngx_module_t  ngx_http_proxy_module;
 
 
 static ngx_command_t  ngx_http_proxy_commands[] = {
@@ -699,6 +572,12 @@ static ngx_command_t  ngx_http_proxy_commands[] = {
       0,
       NULL },
 
+    { ngx_string("proxy_rewrite_uri"),
+      NGX_HTTP_MAIN_CONF|NGX_HTTP_SRV_CONF|NGX_HTTP_LOC_CONF|NGX_CONF_TAKE1,
+      ngx_http_proxy_rewrite_uri,
+      NGX_HTTP_LOC_CONF_OFFSET,
+      offsetof(ngx_http_proxy_loc_conf_t, rewrite_uri),
+      NULL },
 #endif
 
       ngx_null_command
@@ -921,7 +800,7 @@ ngx_http_proxy_handler(ngx_http_request_t *r)
 }
 
 
-static ngx_int_t
+ngx_int_t
 ngx_http_proxy_eval(ngx_http_request_t *r, ngx_http_proxy_ctx_t *ctx,
     ngx_http_proxy_loc_conf_t *plcf)
 {
@@ -1027,7 +906,7 @@ ngx_http_proxy_eval(ngx_http_request_t *r, ngx_http_proxy_ctx_t *ctx,
 
 #if (NGX_HTTP_CACHE)
 
-static ngx_int_t
+ngx_int_t
 ngx_http_proxy_create_key(ngx_http_request_t *r)
 {
     size_t                      len, loc_len;
@@ -1126,7 +1005,7 @@ ngx_http_proxy_create_key(ngx_http_request_t *r)
 #endif
 
 
-static ngx_int_t
+ngx_int_t
 ngx_http_proxy_create_request(ngx_http_request_t *r)
 {
     size_t                        len, uri_len, loc_len, body_len;
@@ -1148,6 +1027,10 @@ ngx_http_proxy_create_request(ngx_http_request_t *r)
     u = r->upstream;
 
     plcf = ngx_http_get_module_loc_conf(r, ngx_http_proxy_module);
+    if (plcf->rewrite_uri.len) {
+        ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "rewrite r->uri to \"/d\"");
+        r->uri = plcf->rewrite_uri;
+    }
 
 #if (NGX_HTTP_CACHE)
     headers = u->cacheable ? &plcf->headers_cache : &plcf->headers;
@@ -1430,7 +1313,7 @@ ngx_http_proxy_create_request(ngx_http_request_t *r)
     }
 
     ngx_log_debug2(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                   "http proxy header:%N\"%*s\"",
+                   "http proxy header all:%N\"%*s\"",
                    (size_t) (b->last - b->pos), b->pos);
 
     if (r->request_body_no_buffering) {
@@ -1477,7 +1360,7 @@ ngx_http_proxy_create_request(ngx_http_request_t *r)
 }
 
 
-static ngx_int_t
+ngx_int_t
 ngx_http_proxy_reinit_request(ngx_http_request_t *r)
 {
     ngx_http_proxy_ctx_t  *ctx;
@@ -1670,7 +1553,7 @@ out:
 }
 
 
-static ngx_int_t
+ngx_int_t
 ngx_http_proxy_process_status_line(ngx_http_request_t *r)
 {
     size_t                 len;
@@ -1902,7 +1785,7 @@ ngx_http_proxy_process_header(ngx_http_request_t *r)
 }
 
 
-static ngx_int_t
+ngx_int_t
 ngx_http_proxy_input_filter_init(void *data)
 {
     ngx_http_request_t    *r = data;
@@ -1961,7 +1844,7 @@ ngx_http_proxy_input_filter_init(void *data)
 }
 
 
-static ngx_int_t
+ngx_int_t
 ngx_http_proxy_copy_filter(ngx_event_pipe_t *p, ngx_buf_t *buf)
 {
     ngx_buf_t           *b;
@@ -2148,7 +2031,7 @@ ngx_http_proxy_chunked_filter(ngx_event_pipe_t *p, ngx_buf_t *buf)
 }
 
 
-static ngx_int_t
+ngx_int_t
 ngx_http_proxy_non_buffered_copy_filter(void *data, ssize_t bytes)
 {
     ngx_http_request_t   *r = data;
@@ -2319,7 +2202,7 @@ ngx_http_proxy_non_buffered_chunked_filter(void *data, ssize_t bytes)
 }
 
 
-static void
+void
 ngx_http_proxy_abort_request(ngx_http_request_t *r)
 {
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
@@ -2329,7 +2212,7 @@ ngx_http_proxy_abort_request(ngx_http_request_t *r)
 }
 
 
-static void
+void
 ngx_http_proxy_finalize_request(ngx_http_request_t *r, ngx_int_t rc)
 {
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
@@ -2487,7 +2370,7 @@ ngx_http_proxy_internal_chunked_variable(ngx_http_request_t *r,
 }
 
 
-static ngx_int_t
+ngx_int_t
 ngx_http_proxy_rewrite_redirect(ngx_http_request_t *r, ngx_table_elt_t *h,
     size_t prefix)
 {
@@ -2519,7 +2402,7 @@ ngx_http_proxy_rewrite_redirect(ngx_http_request_t *r, ngx_table_elt_t *h,
 }
 
 
-static ngx_int_t
+ngx_int_t
 ngx_http_proxy_rewrite_cookie(ngx_http_request_t *r, ngx_table_elt_t *h)
 {
     size_t                      prefix;
@@ -4078,6 +3961,28 @@ ngx_http_proxy_rewrite_regex(ngx_conf_t *cf, ngx_http_proxy_rewrite_t *pr,
 #endif
 }
 
+static char *
+ngx_http_proxy_rewrite_uri(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)
+{
+    ngx_http_proxy_loc_conf_t *plcf = conf;
+    ngx_str_t *value;
+
+    if (plcf->rewrite_uri.len) {
+        return "is_duplicate";
+    }
+
+    value = cf->args->elts;
+    plcf->rewrite_uri.len = value[1].len;
+    plcf->rewrite_uri.data = ngx_palloc(cf->pool, value[1].len);
+    if (plcf->rewrite_uri.data == NULL) {
+        ngx_conf_log_error(NGX_LOG_EMERG, cf, 0, "config plcf rewrite_uri fail");
+        return NGX_CONF_ERROR;
+    }
+    ngx_memcpy(plcf->rewrite_uri.data, value[1].data, value[1].len);
+    ngx_conf_log_error(NGX_LOG_DEBUG, cf, 0, "plcf->rewrite_uri:%V", &plcf->rewrite_uri);
+
+    return NGX_CONF_OK;
+}
 
 static char *
 ngx_http_proxy_store(ngx_conf_t *cf, ngx_command_t *cmd, void *conf)

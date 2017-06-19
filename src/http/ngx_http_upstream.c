@@ -480,10 +480,67 @@ ngx_http_upstream_create(ngx_http_request_t *r)
 void
 ngx_http_upstream_init(ngx_http_request_t *r)
 {
-    ngx_connection_t     *c;
+	ngx_str_t req_json;
+	ngx_buf_t *buf;
+	ngx_chain_t *cl;
+	ngx_uint_t len;
+	u_char *p;
+	//ngx_int_t rc;
+	//ngx_buf_t *b;
 
+    ngx_connection_t     *c;
+	
     c = r->connection;
 
+
+    /* parse json packet body and search cache. if can search return else forward to sm_httdms */
+	ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0,
+                      			"ngx_http_upstream_init:"
+                      			"r->request_body:%p, r->request_body->bufs:%p", 
+                      			r->request_body, r->request_body->bufs);
+	
+	if (!(r->method & (NGX_HTTP_GET | NGX_HTTP_POST))) {
+		ngx_http_finalize_request(r, NGX_HTTP_NOT_ALLOWED);
+		return;
+	}
+	
+	if (r->request_body == NULL || r->request_body->bufs == NULL) {
+		ngx_http_finalize_request(r, NGX_HTTP_BAD_REQUEST);
+		return;
+	}
+
+	/* read requst json body, store in  req_json */
+	cl = r->request_body->bufs;
+	buf = cl->buf;
+	if (cl->next == NULL) {
+		req_json.len = buf->last - buf->pos;
+		req_json.data = buf->pos;
+	} else {
+		len = buf->last - buf->pos;
+		cl = cl->next;
+
+		for (/* void */; cl; cl = cl->next) {
+			buf = cl->buf;
+			len += buf->last - buf->pos;
+		}
+
+		p = ngx_palloc(r->pool, len);
+		if (p == NULL) {
+			ngx_http_finalize_request(r, NGX_HTTP_INTERNAL_SERVER_ERROR);
+			return;
+		}
+		req_json.data = p;
+
+		 cl = r->request_body->bufs;
+		 for ( /* void */ ; cl; cl = cl->next) {
+		 	buf = cl->buf;
+			p = ngx_cpymem(p, buf->pos, buf->last - buf->pos);
+		}
+	}
+
+	
+	ngx_log_error(NGX_LOG_DEBUG, r->connection->log, 0, "request_body:%V", &req_json);
+	
     ngx_log_debug1(NGX_LOG_DEBUG_HTTP, c->log, 0,
                    "http init upstream, client timer: %d", c->read->timer_set);
 
@@ -1879,7 +1936,7 @@ ngx_http_upstream_send_request_body(ngx_http_request_t *r,
     ngx_http_core_loc_conf_t  *clcf;
 
     ngx_log_debug0(NGX_LOG_DEBUG_HTTP, r->connection->log, 0,
-                   "http upstream send request body");
+                   "http upstream send request body, r->request_body_no_buffering:%d", r->request_body_no_buffering);
 
     if (!r->request_body_no_buffering) {
 
@@ -2204,7 +2261,7 @@ ngx_http_upstream_process_header(ngx_http_request_t *r, ngx_http_upstream_t *u)
         return;
     }
 
-    n = u->buffer.last - u->buffer.pos;
+    n = u->buffer.last - u->buffer.pos; /* preread response body len */
 
     if (n) {
         u->buffer.last = u->buffer.pos;
@@ -2901,7 +2958,9 @@ ngx_http_upstream_send_response(ngx_http_request_t *r, ngx_http_upstream_t *u)
     p->temp_file->file.log = c->log;
     p->temp_file->path = u->conf->temp_path;
     p->temp_file->pool = r->pool;
-
+	
+    ngx_log_debug1(NGX_LOG_DEBUG_HTTP, c->log, 0,
+                   "pipe cacheable: %d", p->cacheable);
     if (p->cacheable) {
         p->temp_file->persistent = 1;
 
@@ -3769,7 +3828,6 @@ ngx_http_upstream_process_request(ngx_http_request_t *r,
         if (u->store) {
 
             if (p->upstream_eof || p->upstream_done) {
-
                 tf = p->temp_file;
 
                 if (u->headers_in.status_n == NGX_HTTP_OK

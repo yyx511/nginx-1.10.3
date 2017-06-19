@@ -784,7 +784,7 @@ ngx_module_t  ngx_http_core_module = {
 
 
 ngx_str_t  ngx_http_core_get_method = { 3, (u_char *) "GET" };
-
+ngx_str_t  ngx_http_core_post_method = { 4, (u_char *) "POST" }; 
 
 void
 ngx_http_handler(ngx_http_request_t *r)
@@ -1363,8 +1363,8 @@ ngx_http_core_content_phase(ngx_http_request_t *r,
 {
     size_t     root;
     ngx_int_t  rc;
-    ngx_str_t  path;
-
+    ngx_str_t  path;    	
+	
     if (r->content_handler) {
         r->write_event_handler = ngx_http_request_empty_handler;
         ngx_http_finalize_request(r, r->content_handler(r));
@@ -2485,7 +2485,7 @@ ngx_http_subrequest(ngx_http_request_t *r,
     sr->stream = r->stream;
 #endif
 
-    sr->method = NGX_HTTP_GET;
+    sr->method = NGX_HTTP_POST; //NGX_HTTP_GET;
     sr->http_version = r->http_version;
 
     sr->request_line = r->request_line;
@@ -2502,7 +2502,8 @@ ngx_http_subrequest(ngx_http_request_t *r,
     sr->waited = (flags & NGX_HTTP_SUBREQUEST_WAITED) != 0;
 
     sr->unparsed_uri = r->unparsed_uri;
-    sr->method_name = ngx_http_core_get_method;
+	
+    sr->method_name = ngx_http_core_post_method; //ngx_http_core_get_method;
     sr->http_protocol = r->http_protocol;
 
     ngx_http_set_exten(sr);

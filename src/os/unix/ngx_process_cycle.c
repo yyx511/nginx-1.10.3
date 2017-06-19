@@ -304,7 +304,7 @@ ngx_single_process_cycle(ngx_cycle_t *cycle)
     }
 
     for ( ;; ) {
-        ngx_log_debug0(NGX_LOG_DEBUG_EVENT, cycle->log, 0, "worker cycle");
+        ngx_log_debug0(NGX_LOG_DEBUG_EVENT, cycle->log, 0, "\nworker cycle");
 
         ngx_process_events_and_timers(cycle);
 
@@ -727,7 +727,7 @@ static void
 ngx_worker_process_cycle(ngx_cycle_t *cycle, void *data)
 {
     ngx_int_t worker = (intptr_t) data;
-
+	
     ngx_process = NGX_PROCESS_WORKER;
     ngx_worker = worker;
 
@@ -748,7 +748,7 @@ ngx_worker_process_cycle(ngx_cycle_t *cycle, void *data)
             }
         }
 
-        ngx_log_debug0(NGX_LOG_DEBUG_EVENT, cycle->log, 0, "worker cycle");
+        ngx_log_debug0(NGX_LOG_DEBUG_EVENT, cycle->log, 0, "\nworker cycle");
 
         ngx_process_events_and_timers(cycle);
 
